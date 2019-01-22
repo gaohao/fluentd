@@ -47,6 +47,8 @@ module Fluent
 
     desc 'The timeout time when sending event logs.'
     config_param :send_timeout, :time, default: 60
+    desc 'The timeout time when connecting to the server.'
+    config_param :connect_timeout, :time, default: 30
     desc 'The transport protocol to use for heartbeats.(udp,tcp,none)'
     config_param :heartbeat_type, default: :udp do |val|
       case val.downcase
@@ -281,7 +283,8 @@ module Fluent
 
     #FORWARD_TCP_HEARTBEAT_DATA = FORWARD_HEADER + ''.to_msgpack + [].to_msgpack
     def send_heartbeat_tcp(node)
-      sock = connect(node)
+      #TODO should we use heartbeat_interval?
+      sock = connect(node, @connect_timeout.to_i)
       begin
         opt = [1, @send_timeout.to_i].pack('I!I!')  # { int l_onoff; int l_linger; }
         sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, opt)
@@ -296,7 +299,7 @@ module Fluent
     end
 
     def send_data(node, tag, chunk)
-      sock = connect(node)
+      sock = connect(node, @connect_timeout.to_i)
       begin
         opt = [1, @send_timeout.to_i].pack('I!I!')  # { int l_onoff; int l_linger; }
         sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, opt)
@@ -373,9 +376,18 @@ module Fluent
       end
     end
 
-    def connect(node)
+    def connect(node, timeout)
       # TODO unix socket?
-      TCPSocket.new(node.resolved_host, node.port)
+      rh = node.resolved_host
+      #@log.trace "connecting to #{node.host}(#{rh}:#{node.port}) with timeout #{timeout}"
+      begin
+        Socket.tcp(rh, node.port, connect_timeout: timeout)
+      rescue Errno::ETIMEDOUT => e
+        @log.warn "timed out when connecting to #{node.host}(#{rh}:#{node.port})"
+        raise e
+      rescue => e
+        raise e
+      end
     end
 
     class HeartbeatRequestTimer < Coolio::TimerWatcher
